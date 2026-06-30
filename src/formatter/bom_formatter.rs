@@ -82,25 +82,49 @@ fn get_extension(path: &Path) -> String {
         .to_string()
 }
 
+/// Read up to `buf.len()` bytes, returning how many were read. Fewer than
+/// `buf.len()` bytes are returned only when EOF is reached first.
+fn read_fill(reader: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
+    let mut filled = 0;
+    while filled < buf.len() {
+        match reader.read(&mut buf[filled..])? {
+            0 => break,
+            n => filled += n,
+        }
+    }
+    Ok(filled)
+}
+
 /// remove utf-8 BOM mark of given file
 fn remove_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
     println!("Removing BOM from {}", path.display());
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
-    let mut content = Vec::new();
-    file.read_to_end(&mut content)?;
-
-    if !content.starts_with(BOM) {
+    // Only the first bytes are needed to decide whether a BOM is present.
+    let mut head = vec![0u8; BOM.len()];
+    if read_fill(&mut file, &mut head)? != BOM.len() || head != BOM {
         return Ok(false);
     }
 
-    // Rewrite the file in place: shift the body to the front and drop the now
-    // stale trailing bytes. No temp file / rename, so there is no chance of the
-    // Windows "replace a file with an open handle" error (os error 5).
-    let body = &content[BOM.len()..];
-    file.seek(SeekFrom::Start(0))?;
-    file.write_all(body)?;
-    file.set_len(body.len() as u64)?;
+    // Shift the body left over the BOM in place, streaming in fixed-size chunks
+    // so the whole file is never held in memory. Each chunk is read from
+    // `read_pos` and written 3 bytes earlier at `write_pos`; since the write
+    // region trails the read region they never overlap with not-yet-read bytes.
+    let mut read_pos = BOM.len() as u64;
+    let mut write_pos = 0u64;
+    let mut buf = [0u8; 8192];
+    loop {
+        file.seek(SeekFrom::Start(read_pos))?;
+        let n = file.read(&mut buf)?;
+        if n == 0 {
+            break;
+        }
+        file.seek(SeekFrom::Start(write_pos))?;
+        file.write_all(&buf[..n])?;
+        read_pos += n as u64;
+        write_pos += n as u64;
+    }
+    file.set_len(write_pos)?;
     println!("Removed BOM from {}", path.display());
     Ok(true)
 }
@@ -109,18 +133,23 @@ fn remove_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
 fn add_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
     let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
-    let mut content = Vec::new();
-    file.read_to_end(&mut content)?;
-
-    if content.starts_with(BOM) {
+    // Peek the first bytes; if a BOM is already there we are done without
+    // reading the rest of the file.
+    let mut content = vec![0u8; BOM.len()];
+    let head = read_fill(&mut file, &mut content)?;
+    content.truncate(head);
+    if content == BOM {
         return Ok(false);
     }
+
+    // The whole file is required to validate that it is UTF-8 before we touch it.
+    file.read_to_end(&mut content)?;
     if !is_buf_utf8(&content) {
         return Ok(false);
     }
 
-    // Rewrite the file in place. The file only grows (by BOM.len()), so the old
-    // content is fully overwritten and no truncation is needed.
+    // Rewrite in place. The file only grows (by BOM.len()), so the old content
+    // is fully overwritten and no truncation is needed.
     file.seek(SeekFrom::Start(0))?;
     file.write_all(BOM)?;
     file.write_all(&content)?;
@@ -220,6 +249,22 @@ mod tests {
 
         assert!(remove_bom(&path).unwrap());
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn remove_bom_handles_file_larger_than_chunk() {
+        let dir = tempdir().unwrap();
+        // Body larger than the 8 KiB streaming chunk to exercise the loop and
+        // its chunk boundaries.
+        let body: Vec<u8> = (0..20_000u32).map(|i| (i % 251) as u8).collect();
+        let mut bytes = BOM.to_vec();
+        bytes.extend_from_slice(&body);
+        let path = write_file(dir.path(), "big.bin", &bytes);
+
+        let changed = remove_bom(&path).unwrap();
+
+        assert!(changed);
+        assert_eq!(fs::read(&path).unwrap(), body);
     }
 
     #[test]
