@@ -4,14 +4,6 @@ on:
   pull_request:
  
 jobs:
-  cargo-test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-      - name: Cargo test
-        run: cargo test
-
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -25,3 +17,16 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Run cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2
+
+  cargo-test:
+    needs: lint
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Cargo test
+        run: cargo test
