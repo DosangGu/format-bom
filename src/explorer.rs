@@ -54,3 +54,41 @@ fn generate_gitignore_regex_patterns(gitignore_file: &PathBuf) -> Vec<Regex> {
     }
     patterns
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+    use std::fs;
+    use tempfile::tempdir;
+
+    fn listed_set(path: &Path) -> HashSet<PathBuf> {
+        get_file_list(&path.to_path_buf()).into_iter().collect()
+    }
+
+    #[test]
+    fn get_file_list_returns_files_in_dir_and_subdirs() {
+        let dir = tempdir().unwrap();
+        let a = dir.path().join("a.txt");
+        fs::write(&a, b"a").unwrap();
+        fs::create_dir(dir.path().join("sub")).unwrap();
+        let b = dir.path().join("sub").join("b.txt");
+        fs::write(&b, b"b").unwrap();
+
+        let found = listed_set(dir.path());
+
+        assert_eq!(found, HashSet::from([a, b]));
+    }
+
+    #[test]
+    fn get_file_list_skips_hidden_files() {
+        let dir = tempdir().unwrap();
+        let visible = dir.path().join("visible.txt");
+        fs::write(&visible, b"v").unwrap();
+        fs::write(dir.path().join(".hidden"), b"h").unwrap();
+
+        let found = listed_set(dir.path());
+
+        assert_eq!(found, HashSet::from([visible]));
+    }
+}

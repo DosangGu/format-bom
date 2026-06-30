@@ -160,6 +160,7 @@ fn add_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashSet;
     use std::fs;
     use tempfile::tempdir;
 
@@ -167,6 +168,63 @@ mod tests {
         let path = dir.join(name);
         fs::write(&path, bytes).unwrap();
         path
+    }
+
+    fn ext_set(exts: &[&str]) -> HashSet<String> {
+        exts.iter().map(|e| e.to_string()).collect()
+    }
+
+    #[test]
+    fn get_extension_variants() {
+        assert_eq!(get_extension(Path::new("a.rs")), "rs");
+        assert_eq!(get_extension(Path::new("README")), "");
+        assert_eq!(get_extension(Path::new("a.tar.gz")), "gz");
+        assert_eq!(get_extension(Path::new(".gitignore")), "");
+        assert_eq!(get_extension(Path::new("x.TXT")), "TXT");
+    }
+
+    #[test]
+    fn register_files_routes_by_extension() {
+        let rule = FixRule {
+            mode: FixMode::Add,
+            ext_add: ext_set(&["cs"]),
+            ext_remove: ext_set(&["md"]),
+        };
+        let mut formatter = BomFormatter::new(&rule);
+        let files = vec![
+            PathBuf::from("a.cs"),
+            PathBuf::from("b.md"),
+            PathBuf::from("c.txt"),
+        ];
+
+        formatter.register_files(&files);
+
+        // a.cs matches ext_add; c.txt matches nothing so it follows Add mode.
+        assert_eq!(formatter.files_to_add_bom, vec![&files[0], &files[2]]);
+        // b.md matches ext_remove.
+        assert_eq!(formatter.files_to_remove_bom, vec![&files[1]]);
+    }
+
+    #[test]
+    fn register_files_unmatched_follow_remove_mode() {
+        let rule = FixRule {
+            mode: FixMode::Remove,
+            ext_add: ext_set(&["cs"]),
+            ext_remove: ext_set(&["md"]),
+        };
+        let mut formatter = BomFormatter::new(&rule);
+        let files = vec![
+            PathBuf::from("a.cs"),
+            PathBuf::from("b.md"),
+            PathBuf::from("c.txt"),
+        ];
+
+        formatter.register_files(&files);
+
+        // a.cs still matches ext_add.
+        assert_eq!(formatter.files_to_add_bom, vec![&files[0]]);
+        // b.md matches ext_remove; c.txt is unmatched so it follows Remove mode.
+        assert_eq!(formatter.files_to_remove_bom, vec![&files[1], &files[2]]);
     }
 
     #[test]
