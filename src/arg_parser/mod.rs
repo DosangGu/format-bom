@@ -19,13 +19,13 @@ fn get_fix_mode(fix_option: &Args) -> Result<FixModeArgs, Box<dyn std::error::Er
     if mode.into_iter().filter(|&x| x).count() > 1 {
         Err("You can not set multiple fix mode.".into())
     } else if fix_option.add {
-        return Ok(FixModeArgs::Add);
+        Ok(FixModeArgs::Add)
     } else if fix_option.remove {
-        return Ok(FixModeArgs::Remove);
+        Ok(FixModeArgs::Remove)
     } else if fix_option.add_strict {
-        return Ok(FixModeArgs::AddStrict);
+        Ok(FixModeArgs::AddStrict)
     } else {
-        return Ok(FixModeArgs::Remove);
+        Ok(FixModeArgs::Remove)
     }
 }
 
@@ -141,7 +141,7 @@ mod tests {
         };
 
         let fix_rule_result = parse_args(&args);
-        assert_eq!(fix_rule_result.is_err(), true);
+        assert!(fix_rule_result.is_err());
         assert_eq!(
             fix_rule_result.err().unwrap().to_string(),
             "You can not set add_bom with add mode."
@@ -158,7 +158,7 @@ mod tests {
             add_bom: Some(vec!["cs".to_string()]),
             remove_bom: None,
         };
-        let expected_add = vec!["cs"]
+        let expected_add = ["cs"]
             .iter()
             .map(|x| x.to_string())
             .collect::<HashSet<String>>();
@@ -244,7 +244,7 @@ mod tests {
             add_bom: None,
             remove_bom: Some(vec!["html".to_string()]),
         };
-        let expected_remove = vec!["html"]
+        let expected_remove = ["html"]
             .iter()
             .map(|x| x.to_string())
             .collect::<HashSet<String>>();

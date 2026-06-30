@@ -1,23 +1,20 @@
 use ignore::WalkBuilder;
 use regex::Regex;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Get all files in a directory.
 pub fn get_file_list(path: &PathBuf) -> Vec<PathBuf> {
     let walker = WalkBuilder::new(path).build();
     let mut file_list: Vec<PathBuf> = Vec::new();
-    for result_entry in walker {
-        if let Ok(entry) = result_entry {
-            if entry.file_type().unwrap().is_file() {
-                file_list.push(entry.into_path());
-            }
+    for entry in walker.flatten() {
+        if entry.file_type().unwrap().is_file() {
+            file_list.push(entry.into_path());
         }
     }
     file_list
 }
 
 #[allow(unused)]
-
 /// Filter files by gitignore.
 fn filter_by_gitignore(file_list: Vec<PathBuf>) -> Vec<PathBuf> {
     let gitignore_pattern = generate_gitignore_regex_patterns(&PathBuf::from(".gitignore"));
@@ -28,7 +25,7 @@ fn filter_by_gitignore(file_list: Vec<PathBuf>) -> Vec<PathBuf> {
 }
 
 /// Check if a file is ignored by gitignore.
-fn is_ignored_by_gitignore(file: &PathBuf, gitignore_pattern: &Vec<Regex>) -> bool {
+fn is_ignored_by_gitignore(file: &Path, gitignore_pattern: &[Regex]) -> bool {
     for re in gitignore_pattern {
         if re.is_match(file.to_str().unwrap()) {
             return true;
