@@ -1,11 +1,10 @@
 use crate::arg_parser::{FixMode, FixRule};
 use crate::formatter::checker::is_buf_utf8;
 use std::error::Error;
-use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
-use tempfile::NamedTempFile;
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
 
@@ -86,62 +85,47 @@ fn get_extension(path: &Path) -> String {
 /// remove utf-8 BOM mark of given file
 fn remove_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
     println!("Removing BOM from {}", path.display());
-    let mut reader = get_file_reader(path)?;
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
-    let mut buf = vec![0; BOM.len()];
-    reader.read_exact(&mut buf)?;
+    let mut content = Vec::new();
+    file.read_to_end(&mut content)?;
 
-    if buf != BOM {
+    if !content.starts_with(BOM) {
         return Ok(false);
     }
 
-    let mut temp_file = NamedTempFile::new_in(path.parent().unwrap())?;
-    {
-        let mut writer = BufWriter::new(&mut temp_file);
-        io::copy(&mut reader, &mut writer)?;
-    }
-    // Close the handle to the original file before persisting; on Windows a
-    // rename cannot replace a file that still has an open handle (os error 5).
-    drop(reader);
-    temp_file.persist(path)?;
+    // Rewrite the file in place: shift the body to the front and drop the now
+    // stale trailing bytes. No temp file / rename, so there is no chance of the
+    // Windows "replace a file with an open handle" error (os error 5).
+    let body = &content[BOM.len()..];
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(body)?;
+    file.set_len(body.len() as u64)?;
     println!("Removed BOM from {}", path.display());
     Ok(true)
 }
 
 /// add utf-8 BOM mark to given file if the file is utf-8 encoded
 fn add_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
-    let mut reader = get_file_reader(path)?;
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
-    let mut buf = vec![0; BOM.len()];
+    let mut content = Vec::new();
+    file.read_to_end(&mut content)?;
 
-    reader.read_exact(&mut buf)?;
-
-    if buf == BOM {
+    if content.starts_with(BOM) {
+        return Ok(false);
+    }
+    if !is_buf_utf8(&content) {
         return Ok(false);
     }
 
-    reader.read_to_end(&mut buf)?;
-    if !is_buf_utf8(&buf) {
-        return Ok(false);
-    }
-
-    // Close the handle to the original file before persisting; on Windows a
-    // rename cannot replace a file that still has an open handle (os error 5).
-    drop(reader);
-
-    let mut temp_file = NamedTempFile::new_in(path.parent().unwrap())?;
-    {
-        let mut writer = BufWriter::new(&mut temp_file);
-        writer.write_all(BOM)?;
-        writer.write_all(&buf)?;
-    }
-    temp_file.persist(path)?;
+    // Rewrite the file in place. The file only grows (by BOM.len()), so the old
+    // content is fully overwritten and no truncation is needed.
+    file.seek(SeekFrom::Start(0))?;
+    file.write_all(BOM)?;
+    file.write_all(&content)?;
     println!("Added BOM to {}", path.display());
     Ok(true)
-}
-
-fn get_file_reader(path: &Path) -> Result<BufReader<File>, Box<dyn Error>> {
-    File::open(path).map(BufReader::new).map_err(|e| e.into())
 }
 
 #[cfg(test)]
@@ -219,10 +203,10 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"hello world");
     }
 
-    /// Regression test for issue #5: on Windows, persisting the temp file over a
-    /// path that still had an open read handle failed with "os error 5" (access
-    /// denied). add_bom/remove_bom must now succeed end-to-end. This runs on all
-    /// platforms and specifically guards the Windows code path.
+    /// Regression test for issue #5 (Windows "os error 5"). add_bom/remove_bom
+    /// must succeed end-to-end and round-trip cleanly. With the in-place
+    /// implementation there is no rename at all, so the original failure mode
+    /// cannot occur; this still guards the behavior on all platforms.
     #[test]
     fn add_then_remove_round_trip_succeeds() {
         let dir = tempdir().unwrap();
@@ -236,5 +220,16 @@ mod tests {
 
         assert!(remove_bom(&path).unwrap());
         assert_eq!(fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn add_bom_on_empty_file_yields_only_bom() {
+        let dir = tempdir().unwrap();
+        let path = write_file(dir.path(), "empty.txt", b"");
+
+        let changed = add_bom(&path).unwrap();
+
+        assert!(changed);
+        assert_eq!(fs::read(&path).unwrap(), BOM);
     }
 }
