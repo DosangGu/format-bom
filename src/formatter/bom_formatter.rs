@@ -24,9 +24,9 @@ impl<'a> BomFormatter<'a> {
         }
     }
 
-    pub fn register_files(&mut self, files: &'a Vec<PathBuf>) {
-        self.register_add_bom(&files);
-        self.register_remove_bom(&files);
+    pub fn register_files(&mut self, files: &'a [PathBuf]) {
+        self.register_add_bom(files);
+        self.register_remove_bom(files);
 
         let files_etc: Vec<&PathBuf> = files
             .iter()
@@ -59,7 +59,7 @@ impl<'a> BomFormatter<'a> {
         Ok(())
     }
 
-    fn register_add_bom(&mut self, files: &'a Vec<PathBuf>) {
+    fn register_add_bom(&mut self, files: &'a [PathBuf]) {
         let files_to_add_bom: Vec<&PathBuf> = files
             .iter()
             .filter(|&file| self.fix_rule.ext_add.contains(&get_extension(file)))
@@ -67,7 +67,7 @@ impl<'a> BomFormatter<'a> {
         self.files_to_add_bom.extend(files_to_add_bom);
     }
 
-    fn register_remove_bom(&mut self, files: &'a Vec<PathBuf>) {
+    fn register_remove_bom(&mut self, files: &'a [PathBuf]) {
         let files_to_remove_bom: Vec<&PathBuf> = files
             .iter()
             .filter(|&file| self.fix_rule.ext_remove.contains(&get_extension(file)))
@@ -76,7 +76,7 @@ impl<'a> BomFormatter<'a> {
     }
 }
 
-fn get_extension(path: &PathBuf) -> String {
+fn get_extension(path: &Path) -> String {
     path.extension()
         .unwrap_or_default()
         .to_str()
@@ -92,7 +92,7 @@ fn remove_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
     let mut buf = vec![0; BOM.len()];
     reader.read_exact(&mut buf)?;
 
-    if &buf != BOM {
+    if buf != BOM {
         return Ok(false);
     }
 
@@ -114,12 +114,12 @@ fn add_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
 
     reader.read_exact(&mut buf)?;
 
-    if &buf == BOM {
+    if buf == BOM {
         return Ok(false);
     }
 
     reader.read_to_end(&mut buf)?;
-    if is_buf_utf8(&buf) == false {
+    if !is_buf_utf8(&buf) {
         return Ok(false);
     }
 
@@ -129,13 +129,11 @@ fn add_bom(path: &PathBuf) -> Result<bool, Box<dyn Error>> {
         writer.write_all(BOM)?;
         writer.write_all(&buf)?;
     }
-    temp_file.persist(&path)?;
+    temp_file.persist(path)?;
     println!("Added BOM to {}", path.display());
     Ok(true)
 }
 
 fn get_file_reader(path: &Path) -> Result<BufReader<File>, Box<dyn Error>> {
-    File::open(path)
-        .and_then(|file| Ok(BufReader::new(file)))
-        .map_err(|e| e.into())
+    File::open(path).map(BufReader::new).map_err(|e| e.into())
 }
